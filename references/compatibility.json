@@ -1,0 +1,40 @@
+{
+  "skill_version": "0.1.0",
+  "checked_at": "2026-09-01",
+  "ads_api": {
+    "major": "v1",
+    "base_url": "https://api.ads.openai.com/v1"
+  },
+  "openapi": {
+    "document_version": "2.3.0",
+    "schema_version": "3.1.0",
+    "operation_surface_sha256": "796b1d7ecceac305e3318f869060d0929d5db6d8905df259107d8b6350a3f58a",
+    "url": "https://developers.openai.com/ads/openapi.json"
+  },
+  "human_docs": {
+    "api_overview_changelog": "2026-08-25",
+    "url": "https://developers.openai.com/ads/api-overview"
+  },
+  "policy": {
+    "version": "1.5",
+    "updated": "2026-08-31",
+    "url": "https://openai.com/policies/ad-policies/"
+  },
+  "features": {
+    "ocpc": {"maturity": "open_beta", "url": "https://developers.openai.com/ads/conversion-optimized-campaigns"},
+    "bulk": {"maturity": "limited_preview", "url": "https://developers.openai.com/ads/bulk-api"}
+  },
+  "surface": {
+    "documented": [
+      "/ad_account", "/ad_account/brand", "/ad_account/insights", "/campaigns", "/ad_groups", "/ads",
+      "/upload", "/uploads", "/geo_lookup/search", "/conversions", "/custom_audiences",
+      "PATCH /feeds/{feed_id}/products"
+    ],
+    "bulk_preview": ["/bulk"],
+    "spec_preview": [
+      "/ad_account controls", "/business_agent_tools", "/business_agents", "/lead_forms", "/feeds admin",
+      "/lead_sync_subscriptions", "/partner_data"
+    ],
+    "oauth_only": ["/oauth", "/me", "/ad_accounts", "/ad_account_creation_sessions", "/organizations", "/organization_users"]
+  }
+}
