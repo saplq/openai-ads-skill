@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.0 — 2026-09-01
+
+- Adds zero-command onboarding: drop `ads-manager-api-key.txt` beside `SKILL.md`; the first authenticated action validates, securely stores, and removes it automatically.
+- Keeps manual hidden-prompt and file-import commands as advanced fallbacks.
+
 ## 0.2.0 — 2026-09-01
 
 - Adds `auth import-file` for one-time import of downloaded Ads API key files, with owner/symlink checks, automatic `0600` hardening, live account validation, and optional source removal.

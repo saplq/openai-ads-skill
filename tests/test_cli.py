@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from scripts.openai_ads_lib.cli import _read_key_file, command_api, command_auth, command_capi, command_doctor
+from scripts.openai_ads_lib.cli import _profile_client, _read_key_file, command_api, command_auth, command_capi, command_doctor
 from scripts.openai_ads_lib.client import ApiResponse
 from scripts.openai_ads_lib.errors import AdsManagerError
 from scripts.openai_ads_lib.security import CONFIG_ENV, load_credentials
@@ -36,6 +36,70 @@ def api_args(body_file, **changes):
 
 
 class CliTests(unittest.TestCase):
+    def test_root_drop_file_auto_imports_and_is_removed(self):
+        class AccountClient:
+            def __init__(self, key):
+                self.key = key
+
+            def request(self, method, path):
+                return ApiResponse(200, {"id": "acct_auto", "name": "Auto", "timezone": "UTC"}, {}, "req_auth")
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "skill"
+            root.mkdir()
+            source = root / "ads-manager-api-key.txt"
+            source.write_text("auto-private-key", encoding="utf-8")
+            os.chmod(source, 0o644)
+            config = Path(temp) / "config"
+            with mock.patch.dict(os.environ, {CONFIG_ENV: str(config)}), \
+                 mock.patch("scripts.openai_ads_lib.cli.ROOT", root), \
+                 mock.patch("scripts.openai_ads_lib.cli.AdsClient", AccountClient):
+                profile, client = _profile_client("main")
+                stored = load_credentials()
+            self.assertFalse(source.exists())
+            self.assertEqual(profile["account_id"], "acct_auto")
+            self.assertEqual(client.key, "auto-private-key")
+            self.assertEqual(stored["profiles"]["main"]["api_key"], "auto-private-key")
+            self.assertEqual(stat.S_IMODE((config / "credentials.json").stat().st_mode), 0o600)
+
+    def test_root_drop_file_does_not_replace_existing_profile(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "skill"
+            root.mkdir()
+            source = root / "ads-manager-api-key.txt"
+            source.write_text("unused-drop-key", encoding="utf-8")
+            config = Path(temp) / "config"
+            with mock.patch.dict(os.environ, {CONFIG_ENV: str(config)}):
+                from scripts.openai_ads_lib.security import save_credentials
+
+                save_credentials({"version": 1, "profiles": {"main": {"api_key": "existing-key", "account_id": "acct_existing"}}})
+                with mock.patch("scripts.openai_ads_lib.cli.ROOT", root):
+                    profile, _client = _profile_client("main")
+            self.assertTrue(source.exists())
+            self.assertEqual(profile["api_key"], "existing-key")
+
+    def test_failed_drop_file_validation_keeps_source(self):
+        class InvalidAccountClient:
+            def __init__(self, key):
+                self.key = key
+
+            def request(self, method, path):
+                return ApiResponse(200, {"name": "Missing ID"}, {}, "req_auth")
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "skill"
+            root.mkdir()
+            source = root / "ads-manager-api-key.txt"
+            source.write_text("still-private-key", encoding="utf-8")
+            config = Path(temp) / "config"
+            with mock.patch.dict(os.environ, {CONFIG_ENV: str(config)}), \
+                 mock.patch("scripts.openai_ads_lib.cli.ROOT", root), \
+                 mock.patch("scripts.openai_ads_lib.cli.AdsClient", InvalidAccountClient):
+                with self.assertRaises(AdsManagerError):
+                    _profile_client("main")
+            self.assertTrue(source.exists())
+            self.assertEqual(stat.S_IMODE(source.stat().st_mode), 0o600)
+
     def test_key_file_import_hardens_permissions_and_never_echoes_secret(self):
         class AccountClient:
             def __init__(self, key):

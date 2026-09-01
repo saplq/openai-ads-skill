@@ -4,16 +4,12 @@ Zero-dependency Codex skill for safe OpenAI Ads management, analytics, Pixel+CAP
 
 ## Install
 
-Copy this folder into your skills directory as `openai-ads-manager`, or clone it there. macOS/Linux and Python 3.11+ are supported.
+1. Download or clone this folder as `openai-ads-manager`.
+2. Download your key from OpenAI Ads Manager.
+3. Put it beside `SKILL.md` with the exact name `ads-manager-api-key.txt`.
+4. Ask Codex to use the skill.
 
-```bash
-python3 scripts/openai_ads.py version
-python3 scripts/openai_ads.py doctor --offline
-python3 scripts/openai_ads.py auth login --profile main
-python3 scripts/openai_ads.py auth import-file --profile main --file ~/Downloads/ads-manager-api-key.txt
-```
-
-`auth login` uses a hidden prompt. `auth import-file` safely imports a downloaded one-line key file. Both validate `GET /ad_account`, then store the key outside the repository. Never paste a key into chat or argv.
+On first authenticated use, the skill validates `GET /ad_account`, moves the key into protected local storage, and removes the copy beside `SKILL.md`. No terminal setup is required.
 
 ## Use
 
@@ -43,9 +39,9 @@ python3 scripts/openai_ads.py api request POST /campaigns --body-file campaign.j
 
 ## Security and versions
 
-Credentials live in `~/.config/openai-ads-manager/`: directory `0700`, files `0600`, atomic writes, strict owner and symlink checks. Ads and CAPI keys are separate. Audit logs exclude secrets and audience identifiers.
+`ads-manager-api-key.txt` is gitignored, but never commit, share, or archive it. Delete the original copy left in Downloads after the first successful use. Credentials live in `~/.config/openai-ads-manager/`: directory `0700`, files `0600`, atomic writes, strict owner and symlink checks. Ads and CAPI keys are separate.
 
-Version pins are independent: skill `0.2.0`; Ads API `/v1`; OpenAPI `2.3.0`; oCPC open beta; Bulk limited preview; Ads Policy `v1.5`. Run `doctor --check-updates` before beta, preview, or creative changes.
+Version pins are independent: skill `0.3.0`; Ads API `/v1`; OpenAPI `2.3.0`; oCPC open beta; Bulk limited preview; Ads Policy `v1.5`. Run `doctor --check-updates` before beta, preview, or creative changes.
 
 No live writes are run during installation or tests. The only optional real smoke is `GET /ad_account` after you enter a key locally.
 

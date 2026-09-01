@@ -29,7 +29,6 @@ from .security import (
     confirmation_hash,
     config_dir,
     fingerprint,
-    get_profile,
     load_credentials,
     redact,
     safe_json_file,
@@ -40,6 +39,7 @@ from .surfaces import authorize_surface, classify_path, is_read, normalize_path,
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPATIBILITY_PATH = ROOT / "references" / "compatibility.json"
+DROP_KEY_FILENAME = "ads-manager-api-key.txt"
 
 
 def envelope(
@@ -83,7 +83,14 @@ def _account_id(payload: Any) -> str | None:
 
 
 def _profile_client(profile_name: str) -> tuple[dict[str, Any], AdsClient]:
-    profile = get_profile(profile_name)
+    profile = load_credentials().get("profiles", {}).get(profile_name)
+    if not isinstance(profile, dict) or not profile.get("api_key"):
+        drop_file = ROOT / DROP_KEY_FILENAME
+        if not drop_file.exists():
+            raise AuthError(
+                f"Profile '{profile_name}' is not authenticated; place {DROP_KEY_FILENAME} beside SKILL.md"
+            )
+        profile, _warnings = _import_key_file(profile_name, drop_file, remove_source=True, automatic=True)
     return profile, AdsClient(profile["api_key"])
 
 
@@ -215,19 +222,8 @@ def command_auth(args: argparse.Namespace) -> dict[str, Any]:
             key, source_path, warnings = _read_key_file(args.file)
         if not key:
             raise AuthError("No API key entered")
-        response = AdsClient(key).request("GET", "/ad_account")
-        account = _account_data(response.data)
-        account_id = _account_id(response.data)
-        if not account_id:
-            raise AuthError("GET /ad_account succeeded but returned no account ID")
-        profiles[name] = {
-            "api_key": key,
-            "account_id": account_id,
-            "account_name": account.get("name"),
-            "timezone": account.get("timezone") or account.get("time_zone"),
-            "key_fingerprint": fingerprint(key),
-            "validated_at": datetime.now(timezone.utc).isoformat(),
-        }
+        profiles[name] = _validated_profile(key)
+        account_id = profiles[name]["account_id"]
         save_credentials(credentials)
         removed_source = False
         if source_path and args.remove_source:
@@ -242,14 +238,25 @@ def command_auth(args: argparse.Namespace) -> dict[str, Any]:
         }, warnings=warnings)
     if args.auth_command == "status":
         stored = profiles.get(name)
+        auto_imported = False
+        auto_warnings: list[str] = []
+        drop_file = ROOT / DROP_KEY_FILENAME
+        if not stored and drop_file.exists():
+            stored, auto_warnings = _import_key_file(name, drop_file, remove_source=True, automatic=True)
+            auto_imported = True
         if not stored:
-            return envelope(ok=True, profile=name, data={"authenticated": False})
+            return envelope(ok=True, profile=name, data={
+                "authenticated": False,
+                "drop_file_expected": str(drop_file),
+            })
         response = AdsClient(stored["api_key"]).request("GET", "/ad_account")
         return envelope(ok=True, profile=name, account_id=_account_id(response.data), data={
             "authenticated": True,
             "key_fingerprint": stored.get("key_fingerprint"),
             "validated": True,
-        }, request={"request_id": response.request_id})
+            "auto_imported": auto_imported,
+            "drop_file_removed": auto_imported,
+        }, warnings=auto_warnings, request={"request_id": response.request_id})
     if args.auth_command == "logout":
         removed = profiles.pop(name, None)
         save_credentials(credentials)
@@ -277,6 +284,43 @@ def _read_key_file(path_value: str) -> tuple[str, Path, list[str]]:
     if not key or any(char.isspace() for char in key):
         raise AuthError("Downloaded key file must contain exactly one non-whitespace token")
     return key, path, warnings
+
+
+def _validated_profile(key: str, *, automatic: bool = False) -> dict[str, Any]:
+    response = AdsClient(key).request("GET", "/ad_account")
+    account = _account_data(response.data)
+    account_id = _account_id(response.data)
+    if not account_id:
+        raise AuthError("GET /ad_account succeeded but returned no account ID")
+    profile = {
+        "api_key": key,
+        "account_id": account_id,
+        "account_name": account.get("name"),
+        "timezone": account.get("timezone") or account.get("time_zone"),
+        "key_fingerprint": fingerprint(key),
+        "validated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if automatic:
+        profile["auto_imported_drop_file"] = True
+    return profile
+
+
+def _import_key_file(
+    profile_name: str,
+    path: Path,
+    *,
+    remove_source: bool,
+    automatic: bool = False,
+) -> tuple[dict[str, Any], list[str]]:
+    key, source_path, warnings = _read_key_file(str(path))
+    profile = _validated_profile(key, automatic=automatic)
+    credentials = load_credentials()
+    credentials.setdefault("profiles", {})[profile_name] = profile
+    save_credentials(credentials)
+    if remove_source:
+        source_path.unlink()
+        warnings.append("Imported and removed the root key file after secure storage")
+    return profile, warnings
 
 
 def _preview_capability(client: AdsClient, surface: str) -> None:
