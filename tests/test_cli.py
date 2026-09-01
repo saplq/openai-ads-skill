@@ -1,13 +1,16 @@
 import argparse
 import json
+import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from scripts.openai_ads_lib.cli import command_api, command_capi, command_doctor
+from scripts.openai_ads_lib.cli import _read_key_file, command_api, command_auth, command_capi, command_doctor
 from scripts.openai_ads_lib.client import ApiResponse
 from scripts.openai_ads_lib.errors import AdsManagerError
+from scripts.openai_ads_lib.security import CONFIG_ENV, load_credentials
 
 
 class FakeClient:
@@ -33,6 +36,36 @@ def api_args(body_file, **changes):
 
 
 class CliTests(unittest.TestCase):
+    def test_key_file_import_hardens_permissions_and_never_echoes_secret(self):
+        class AccountClient:
+            def __init__(self, key):
+                self.key = key
+
+            def request(self, method, path):
+                return ApiResponse(200, {"id": "acct_1", "name": "Account", "timezone": "UTC"}, {}, "req_auth")
+
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "ads-manager-api-key.txt"
+            source.write_text("downloaded-private-key", encoding="utf-8")
+            os.chmod(source, 0o644)
+            config = Path(temp) / "config"
+            args = argparse.Namespace(auth_command="import-file", profile="main", file=str(source), remove_source=False)
+            with mock.patch.dict(os.environ, {CONFIG_ENV: str(config)}), \
+                 mock.patch("scripts.openai_ads_lib.cli.AdsClient", AccountClient):
+                result = command_auth(args)
+                stored = load_credentials()
+            self.assertEqual(stat.S_IMODE(source.stat().st_mode), 0o600)
+            self.assertTrue(result["data"]["authenticated"])
+            self.assertNotIn("downloaded-private-key", json.dumps(result))
+            self.assertEqual(stored["profiles"]["main"]["api_key"], "downloaded-private-key")
+
+    def test_key_file_import_rejects_multiple_tokens(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "key.txt"
+            source.write_text("one\ntwo\n", encoding="utf-8")
+            with self.assertRaises(AdsManagerError):
+                _read_key_file(str(source))
+
     def test_mutation_confirmation_and_readback(self):
         fake = FakeClient()
         with tempfile.TemporaryDirectory() as temp:

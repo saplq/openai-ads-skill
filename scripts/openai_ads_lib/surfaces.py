@@ -7,6 +7,7 @@ import urllib.parse
 from typing import Any
 
 from .errors import PolicyError, ValidationError
+from . import VERSION
 
 DOCUMENTED = (
     "/campaigns",
@@ -72,7 +73,7 @@ def authorize_surface(path: str, requested: str, method: str | None = None) -> s
     if actual == "secret":
         raise PolicyError("Secret-generating endpoints are blocked in generic API mode; use a secret-aware flow or Ads Manager")
     if actual == "oauth_only":
-        raise ValidationError("OAuth-only API paths are unsupported in skill version 0.1.0")
+        raise ValidationError(f"OAuth-only API paths are unsupported in skill version {VERSION}")
     if actual == "unknown":
         raise ValidationError("Unknown API path; update compatibility.json after verifying official documentation")
     if actual != "documented" and requested != actual:

@@ -6,6 +6,8 @@ import argparse
 import getpass
 import hashlib
 import json
+import os
+import stat
 import urllib.error
 import urllib.request
 import uuid
@@ -204,8 +206,13 @@ def command_auth(args: argparse.Namespace) -> dict[str, Any]:
     name = args.profile
     credentials = load_credentials()
     profiles = credentials.setdefault("profiles", {})
-    if args.auth_command == "login":
-        key = getpass.getpass("OpenAI Ads API key (hidden): ").strip()
+    if args.auth_command in {"login", "import-file"}:
+        source_path: Path | None = None
+        warnings: list[str] = []
+        if args.auth_command == "login":
+            key = getpass.getpass("OpenAI Ads API key (hidden): ").strip()
+        else:
+            key, source_path, warnings = _read_key_file(args.file)
         if not key:
             raise AuthError("No API key entered")
         response = AdsClient(key).request("GET", "/ad_account")
@@ -222,7 +229,17 @@ def command_auth(args: argparse.Namespace) -> dict[str, Any]:
             "validated_at": datetime.now(timezone.utc).isoformat(),
         }
         save_credentials(credentials)
-        return envelope(ok=True, profile=name, account_id=account_id, data={"authenticated": True, "key_fingerprint": fingerprint(key)})
+        removed_source = False
+        if source_path and args.remove_source:
+            source_path.unlink()
+            removed_source = True
+        return envelope(ok=True, profile=name, account_id=account_id, data={
+            "authenticated": True,
+            "key_fingerprint": fingerprint(key),
+            "imported_from_file": bool(source_path),
+            "source_removed": removed_source,
+            "remove_source_recommended": bool(source_path) and not removed_source,
+        }, warnings=warnings)
     if args.auth_command == "status":
         stored = profiles.get(name)
         if not stored:
@@ -238,6 +255,28 @@ def command_auth(args: argparse.Namespace) -> dict[str, Any]:
         save_credentials(credentials)
         return envelope(ok=True, profile=name, account_id=removed.get("account_id") if removed else None, data={"removed": bool(removed)})
     raise ValidationError("Unknown auth command")
+
+
+def _read_key_file(path_value: str) -> tuple[str, Path, list[str]]:
+    path = Path(path_value).expanduser()
+    if path.is_symlink() or not path.is_file():
+        raise AuthError("Key import source must be a regular non-symlink file")
+    info = path.lstat()
+    if hasattr(os, "getuid") and info.st_uid != os.getuid():
+        raise AuthError("Key import source owner does not match the current user")
+    if info.st_size > 4096:
+        raise AuthError("Key import source is unexpectedly large")
+    warnings: list[str] = []
+    if stat.S_IMODE(info.st_mode) != 0o600:
+        os.chmod(path, 0o600)
+        warnings.append("Hardened imported key file permissions to 0600")
+    try:
+        key = path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise AuthError(f"Cannot read key import source: {type(exc).__name__}") from exc
+    if not key or any(char.isspace() for char in key):
+        raise AuthError("Downloaded key file must contain exactly one non-whitespace token")
+    return key, path, warnings
 
 
 def _preview_capability(client: AdsClient, surface: str) -> None:
@@ -704,7 +743,7 @@ def command_capi(args: argparse.Namespace) -> dict[str, Any]:
             })
     if args.capi_command == "send":
         if not args.validate_only:
-            raise PolicyError("Skill v0.1.0 requires --validate-only; production event sending belongs in the target server integration")
+            raise PolicyError(f"Skill v{VERSION} requires --validate-only; production event sending belongs in the target server integration")
         entry = profile_secrets.get(args.key_name)
         if not entry:
             raise AuthError(f"No local CAPI key named '{args.key_name}' for profile '{args.profile}'")
@@ -736,6 +775,11 @@ def build_parser() -> argparse.ArgumentParser:
         item = auth_sub.add_parser(name)
         item.add_argument("--profile", default="default")
         item.set_defaults(handler=command_auth)
+    import_file = auth_sub.add_parser("import-file")
+    import_file.add_argument("--profile", default="default")
+    import_file.add_argument("--file", required=True, help="Downloaded one-line Ads API key file")
+    import_file.add_argument("--remove-source", action="store_true", help="Delete the source file only after successful validation and storage")
+    import_file.set_defaults(handler=command_auth)
 
     api = sub.add_parser("api")
     api_sub = api.add_subparsers(dest="api_command", required=True)

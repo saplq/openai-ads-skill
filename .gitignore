@@ -6,3 +6,4 @@ __pycache__/
 credentials.json
 capi-secrets.json
 audit.jsonl
+ads-manager-api-key*.txt

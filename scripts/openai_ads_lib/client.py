@@ -16,6 +16,7 @@ from typing import Any, Callable
 from pathlib import Path
 
 from .errors import AdsManagerError, ValidationError, for_status
+from . import VERSION
 from .security import redact
 
 ADS_BASE_URL = "https://api.ads.openai.com/v1"
@@ -143,7 +144,7 @@ class AdsClient:
         url = self.base_url + path + (("?" + encoded_query) if encoded_query else "")
         if raw_body is None and body is not None:
             raw_body = json.dumps(body, ensure_ascii=False).encode("utf-8")
-        headers = {"Authorization": f"Bearer {self.api_key}", "Accept": "application/json", "User-Agent": "openai-ads-manager/0.1.0"}
+        headers = {"Authorization": f"Bearer {self.api_key}", "Accept": "application/json", "User-Agent": f"openai-ads-manager/{VERSION}"}
         if raw_body is not None:
             headers["Content-Type"] = content_type or "application/json"
         if content_length is not None:

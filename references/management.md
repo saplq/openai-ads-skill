@@ -41,7 +41,7 @@ Repeat with `--apply --confirm HASH` only after approval. Budget, bid, targeting
 - Documented: account, campaigns, ad groups, ads, files, geo, insights, conversions, custom audiences, product feeds/delta.
 - Bulk: use `--surface bulk_preview`; limited preview, account capability must be explicit.
 - Spec-only: use `--surface spec_preview`; disabled unless the live account advertises it.
-- OAuth-only: unsupported in `0.1.0`.
+- OAuth-only: unsupported in `0.2.0`.
 - Secret-generating API and SFTP credential endpoints: never use generic `api request`.
 
 Product feed initial setup and SFTP credentials stay in Ads Manager unless current human docs explicitly document the requested API operation. Delta is for updates to existing feed variants; verify current feed docs before applying.

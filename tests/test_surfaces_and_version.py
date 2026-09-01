@@ -15,9 +15,9 @@ class SurfaceAndVersionTests(unittest.TestCase):
     def test_versions_are_synchronized_but_distinct(self):
         manifest = json.loads((ROOT / "references" / "compatibility.json").read_text())
         skill = (ROOT / "SKILL.md").read_text()
-        self.assertEqual(VERSION, "0.1.0")
+        self.assertEqual(VERSION, "0.2.0")
         self.assertEqual(manifest["skill_version"], VERSION)
-        self.assertIn('version: "0.1.0"', skill)
+        self.assertIn('version: "0.2.0"', skill)
         self.assertEqual(manifest["ads_api"]["major"], "v1")
         self.assertEqual(manifest["openapi"]["document_version"], "2.3.0")
         self.assertEqual(len(manifest["openapi"]["operation_surface_sha256"]), 64)

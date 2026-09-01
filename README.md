@@ -10,9 +10,10 @@ Copy this folder into your skills directory as `openai-ads-manager`, or clone it
 python3 scripts/openai_ads.py version
 python3 scripts/openai_ads.py doctor --offline
 python3 scripts/openai_ads.py auth login --profile main
+python3 scripts/openai_ads.py auth import-file --profile main --file ~/Downloads/ads-manager-api-key.txt
 ```
 
-`auth login` asks for the Ads API key in a hidden terminal prompt, validates `GET /ad_account`, then stores it locally. Never paste a key into chat or pass it through argv.
+`auth login` uses a hidden prompt. `auth import-file` safely imports a downloaded one-line key file. Both validate `GET /ad_account`, then store the key outside the repository. Never paste a key into chat or argv.
 
 ## Use
 
@@ -44,7 +45,7 @@ python3 scripts/openai_ads.py api request POST /campaigns --body-file campaign.j
 
 Credentials live in `~/.config/openai-ads-manager/`: directory `0700`, files `0600`, atomic writes, strict owner and symlink checks. Ads and CAPI keys are separate. Audit logs exclude secrets and audience identifiers.
 
-Version pins are independent: skill `0.1.0`; Ads API `/v1`; OpenAPI `2.3.0`; oCPC open beta; Bulk limited preview; Ads Policy `v1.5`. Run `doctor --check-updates` before beta, preview, or creative changes.
+Version pins are independent: skill `0.2.0`; Ads API `/v1`; OpenAPI `2.3.0`; oCPC open beta; Bulk limited preview; Ads Policy `v1.5`. Run `doctor --check-updates` before beta, preview, or creative changes.
 
 No live writes are run during installation or tests. The only optional real smoke is `GET /ad_account` after you enter a key locally.
 
