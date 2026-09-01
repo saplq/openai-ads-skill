@@ -1,0 +1,21 @@
+{
+  "name": "openai-ads-skill",
+  "interface": {
+    "displayName": "OpenAI Ads Skill"
+  },
+  "plugins": [
+    {
+      "name": "openai-ads-manager",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/saplq/openai-ads-skill.git",
+        "ref": "main"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

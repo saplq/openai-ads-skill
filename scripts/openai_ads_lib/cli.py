@@ -85,10 +85,10 @@ def _account_id(payload: Any) -> str | None:
 def _profile_client(profile_name: str) -> tuple[dict[str, Any], AdsClient]:
     profile = load_credentials().get("profiles", {}).get(profile_name)
     if not isinstance(profile, dict) or not profile.get("api_key"):
-        drop_file = ROOT / DROP_KEY_FILENAME
-        if not drop_file.exists():
+        drop_file = _find_drop_key_file()
+        if drop_file is None:
             raise AuthError(
-                f"Profile '{profile_name}' is not authenticated; place {DROP_KEY_FILENAME} beside SKILL.md"
+                f"Profile '{profile_name}' is not authenticated; download {DROP_KEY_FILENAME} or place it beside SKILL.md"
             )
         profile, _warnings = _import_key_file(profile_name, drop_file, remove_source=True, automatic=True)
     return profile, AdsClient(profile["api_key"])
@@ -240,14 +240,14 @@ def command_auth(args: argparse.Namespace) -> dict[str, Any]:
         stored = profiles.get(name)
         auto_imported = False
         auto_warnings: list[str] = []
-        drop_file = ROOT / DROP_KEY_FILENAME
-        if not stored and drop_file.exists():
+        drop_file = _find_drop_key_file()
+        if not stored and drop_file is not None:
             stored, auto_warnings = _import_key_file(name, drop_file, remove_source=True, automatic=True)
             auto_imported = True
         if not stored:
             return envelope(ok=True, profile=name, data={
                 "authenticated": False,
-                "drop_file_expected": str(drop_file),
+                "drop_file_expected": DROP_KEY_FILENAME,
             })
         response = AdsClient(stored["api_key"]).request("GET", "/ad_account")
         return envelope(ok=True, profile=name, account_id=_account_id(response.data), data={
@@ -286,6 +286,15 @@ def _read_key_file(path_value: str) -> tuple[str, Path, list[str]]:
     return key, path, warnings
 
 
+def _find_drop_key_file() -> Path | None:
+    candidates = (
+        ROOT / DROP_KEY_FILENAME,
+        ROOT / "skills" / "openai-ads-manager" / DROP_KEY_FILENAME,
+        Path.home() / "Downloads" / DROP_KEY_FILENAME,
+    )
+    return next((path for path in candidates if path.exists()), None)
+
+
 def _validated_profile(key: str, *, automatic: bool = False) -> dict[str, Any]:
     response = AdsClient(key).request("GET", "/ad_account")
     account = _account_data(response.data)
@@ -319,7 +328,7 @@ def _import_key_file(
     save_credentials(credentials)
     if remove_source:
         source_path.unlink()
-        warnings.append("Imported and removed the root key file after secure storage")
+        warnings.append("Imported and removed the downloaded key file after secure storage")
     return profile, warnings
 
 

@@ -62,6 +62,31 @@ class CliTests(unittest.TestCase):
             self.assertEqual(stored["profiles"]["main"]["api_key"], "auto-private-key")
             self.assertEqual(stat.S_IMODE((config / "credentials.json").stat().st_mode), 0o600)
 
+    def test_downloads_drop_file_auto_imports_without_terminal_auth(self):
+        class AccountClient:
+            def __init__(self, key):
+                self.key = key
+
+            def request(self, method, path):
+                return ApiResponse(200, {"id": "acct_downloads", "timezone": "UTC"}, {}, "req_auth")
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "plugin"
+            root.mkdir()
+            home = Path(temp) / "home"
+            downloads = home / "Downloads"
+            downloads.mkdir(parents=True)
+            source = downloads / "ads-manager-api-key.txt"
+            source.write_text("downloads-private-key", encoding="utf-8")
+            config = Path(temp) / "config"
+            with mock.patch.dict(os.environ, {CONFIG_ENV: str(config)}), \
+                 mock.patch("scripts.openai_ads_lib.cli.ROOT", root), \
+                 mock.patch("scripts.openai_ads_lib.cli.Path.home", return_value=home), \
+                 mock.patch("scripts.openai_ads_lib.cli.AdsClient", AccountClient):
+                profile, _client = _profile_client("main")
+            self.assertFalse(source.exists())
+            self.assertEqual(profile["account_id"], "acct_downloads")
+
     def test_root_drop_file_does_not_replace_existing_profile(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "skill"

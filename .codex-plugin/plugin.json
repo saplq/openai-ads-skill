@@ -1,0 +1,30 @@
+{
+  "name": "openai-ads-manager",
+  "version": "0.4.0",
+  "description": "Manage OpenAI Ads with performance audits, safe campaign workflows, and Pixel+CAPI.",
+  "author": {
+    "name": "saplq",
+    "url": "https://github.com/saplq"
+  },
+  "homepage": "https://github.com/saplq/openai-ads-skill",
+  "repository": "https://github.com/saplq/openai-ads-skill",
+  "license": "MIT",
+  "keywords": ["openai-ads", "codex", "advertising", "analytics", "capi"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "OpenAI Ads Manager",
+    "shortDescription": "Audit and safely manage OpenAI Ads",
+    "longDescription": "Analyze completed reporting windows, prepare and manage Ads campaigns, and configure Pixel+CAPI with confirmation-bound writes and local secret storage.",
+    "developerName": "saplq",
+    "category": "Productivity",
+    "capabilities": ["Ads analytics", "Campaign management", "Pixel and CAPI"],
+    "websiteURL": "https://github.com/saplq/openai-ads-skill",
+    "defaultPrompt": [
+      "Audit my OpenAI Ads account and explain what to do next.",
+      "Prepare a paused campaign for my landing page.",
+      "Add Pixel and CAPI with consent and deduplication."
+    ],
+    "brandColor": "#10A37F",
+    "screenshots": ["./assets/openai-ads-manager-social-preview.png"]
+  }
+}
