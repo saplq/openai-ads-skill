@@ -28,10 +28,13 @@ from .security import (
     body_hash,
     confirmation_hash,
     config_dir,
+    consume_confirmation_plan,
     fingerprint,
+    get_confirmation_plan,
     load_credentials,
     redact,
     safe_json_file,
+    save_confirmation_plan,
     save_credentials,
     secure_read,
 )
@@ -174,15 +177,22 @@ def command_doctor(args: argparse.Namespace) -> dict[str, Any]:
         docs_text = _fetch_text(spec["human_docs"]["url"] + ".md")
         policy_text = _fetch_text(spec["policy"]["url"])
         live_paths = set(live_spec.get("paths", {}))
-        operations = sorted(
-            f"{method.upper()} {path}"
+        operation_pairs = sorted(
+            (method.upper(), path)
             for path, path_item in live_spec.get("paths", {}).items()
             if isinstance(path_item, dict)
             for method in path_item
             if method.lower() in {"get", "post", "put", "patch", "delete", "head", "options"}
         )
+        operations = [f"{method} {path}" for method, path in operation_pairs]
         operation_hash = hashlib.sha256(("\n".join(operations) + "\n").encode("utf-8")).hexdigest()
-        unknown_paths = sorted(path for path in live_paths if classify_path(path) == "unknown")
+        unknown_operations = [
+            f"{method} {path}" for method, path in operation_pairs if classify_path(path, method) == "unknown"
+        ]
+        operation_paths = {path for _method, path in operation_pairs}
+        unknown_paths = sorted(
+            {operation.split(" ", 1)[1] for operation in unknown_operations} | (live_paths - operation_paths)
+        )
         docs_marker = _changelog_marker(spec["human_docs"]["api_overview_changelog"]) in docs_text
         pinned_policy_marker = f"v{spec['policy']['version']}"
         policy_marker = pinned_policy_marker in policy_text.lower()
@@ -193,13 +203,14 @@ def command_doctor(args: argparse.Namespace) -> dict[str, Any]:
             "version_changed": live_spec.get("info", {}).get("version") != spec["openapi"]["document_version"],
             "operation_surface_sha256": operation_hash,
             "operation_surface_changed": operation_hash != spec["openapi"]["operation_surface_sha256"],
+            "unclassified_operations": unknown_operations,
             "unclassified_paths": unknown_paths,
             "path_count": len(live_paths),
             "docs_changelog_marker_present": docs_marker,
             "policy_version_detected": policy_version_live,
             "policy_pin_present": policy_marker,
         }
-        if drift["version_changed"] or drift["operation_surface_changed"] or unknown_paths or not docs_marker or not policy_marker:
+        if drift["version_changed"] or drift["operation_surface_changed"] or unknown_operations or not docs_marker or not policy_marker:
             warnings.append("Ads documentation or policy drift detected; review official sources before mutations")
     return envelope(ok=True, data={
         "versions": command_version(args)["data"],
@@ -343,11 +354,15 @@ def _preview_capability(client: AdsClient, surface: str) -> None:
 def _readback_path(method: str, path: str, response_data: Any) -> str | None:
     if method == "DELETE" or "archive" in path.lower():
         return path.rsplit("/archive", 1)[0]
+    if path == "/ad_account/brand":
+        return "/ad_account"
     if method == "POST":
         data = _account_data(response_data)
         resource_id = data.get("id") if isinstance(data, dict) else None
         if resource_id and path.count("/") == 1:
             return f"{path.rstrip('/')}/{resource_id}"
+        if path.count("/") == 2 and path.startswith(("/campaigns/", "/ad_groups/", "/ads/")):
+            return path
     if method in {"PUT", "PATCH"}:
         return path
     return None
@@ -359,6 +374,10 @@ def _before_path(method: str, path: str) -> str | None:
     action = path.rsplit("/", 1)[-1]
     if action in {"archive", "activate", "pause", "add", "remove", "replace"}:
         return path.rsplit("/", 1)[0]
+    if method == "POST" and path.count("/") == 2 and path.startswith(
+        ("/campaigns/", "/ad_groups/", "/ads/", "/business_agents/", "/lead_forms/")
+    ):
+        return path
     if method in {"PUT", "PATCH", "DELETE"}:
         return path
     return None
@@ -366,7 +385,7 @@ def _before_path(method: str, path: str) -> str | None:
 
 def _planned_after(method: str, path: str, before: Any, body: Any) -> Any:
     action = path.rsplit("/", 1)[-1]
-    if isinstance(before, dict) and isinstance(body, dict) and method in {"PUT", "PATCH"}:
+    if isinstance(before, dict) and isinstance(body, dict) and method in {"POST", "PUT", "PATCH"}:
         return {**before, **body}
     if isinstance(before, dict) and action in {"archive", "activate", "pause"}:
         result = dict(before)
@@ -388,6 +407,31 @@ def _mutation_diff(before: Any, after: Any, *, audience: bool) -> dict[str, Any]
     if audience:
         return {"before": _audience_summary(before), "after": _audience_summary(after)}
     return {"before": redact(before), "after": redact(after)}
+
+
+def _confirmation_request_hash(
+    *,
+    profile: str,
+    account_id: str | None,
+    method: str,
+    path: str,
+    body: Any,
+    query: Any,
+    before_hash_value: str,
+    idempotency_key: str,
+    plan_nonce: str,
+) -> str:
+    return body_hash({
+        "profile": profile,
+        "account_id": account_id,
+        "method": method,
+        "path": path,
+        "body_hash": body_hash(body),
+        "query_hash": body_hash(query),
+        "before_hash": before_hash_value,
+        "idempotency_key_hash": body_hash(idempotency_key),
+        "plan_nonce": plan_nonce,
+    })
 
 
 def command_api(args: argparse.Namespace) -> dict[str, Any]:
@@ -441,9 +485,32 @@ def command_api(args: argparse.Namespace) -> dict[str, Any]:
             PolicyError("Audience mutations require --first-party-confirmed and --non-eea-confirmed"), account_id, warnings,
         )
     if path.startswith("/custom_audiences") and not args.idempotency_key:
-        raise _with_context(
-            ValidationError("Custom audience mutations require a persisted --idempotency-key"), account_id, warnings,
-        )
+        warnings.append("Generated and persisted an idempotency key for the audience mutation")
+    stored_plan: dict[str, Any] | None = None
+    if args.apply:
+        if not args.confirm:
+            raise ConflictErrorWithPlan(
+                "Apply requires a confirmation hash from a fresh dry run",
+                {"operation": f"{method} {path}", "rerun_required": True},
+                account_id,
+                warnings,
+            )
+        stored_plan = get_confirmation_plan(args.confirm)
+        if stored_plan is None:
+            raise ConflictErrorWithPlan(
+                "Confirmation hash is missing, expired, or already consumed; rerun without --apply",
+                {"operation": f"{method} {path}", "rerun_required": True},
+                account_id,
+                warnings,
+            )
+    idempotency_key = (
+        args.idempotency_key
+        or (str(stored_plan.get("idempotency_key")) if stored_plan and stored_plan.get("idempotency_key") else None)
+        or str(uuid.uuid4())
+    )
+    plan_nonce = (
+        str(stored_plan.get("plan_nonce")) if stored_plan and stored_plan.get("plan_nonce") else str(uuid.uuid4())
+    )
     before: Any = None
     before_path = _before_path(method, path)
     if before_path:
@@ -468,47 +535,107 @@ def command_api(args: argparse.Namespace) -> dict[str, Any]:
             body["expected_revision"] = revision
             warnings.append("Bound audience mutation to the live membership_revision")
     diff = _mutation_diff(before, _planned_after(method, path, before, body), audience=is_audience_data)
-    confirmation_material = {"request": body, "before_hash": body_hash(before)}
-    token = confirmation_hash(method, path, confirmation_material, account_id)
+    before_hash_value = body_hash(before)
+    token = confirmation_hash(
+        method,
+        path,
+        body,
+        account_id,
+        query=query,
+        idempotency_key=idempotency_key,
+        before_hash=before_hash_value,
+        plan_nonce=plan_nonce,
+    )
+    request_hash = _confirmation_request_hash(
+        profile=args.profile,
+        account_id=account_id,
+        method=method,
+        path=path,
+        body=body,
+        query=query,
+        before_hash_value=before_hash_value,
+        idempotency_key=idempotency_key,
+        plan_nonce=plan_nonce,
+    )
     plan = {
         "operation": f"{method} {path}",
         "surface": surface,
         "diff": diff,
         "body_hash": body_hash(body),
+        "query_hash": body_hash(query),
+        "idempotency_key_hash": body_hash(idempotency_key)[:12],
         "confirmation_hash": token,
-        "idempotent_retry": bool(args.idempotency_key),
+        "idempotent_retry": True,
+        "single_use": True,
     }
     if not args.apply:
+        saved_plan = save_confirmation_plan(token, {
+            "profile": args.profile,
+            "account_id": account_id,
+            "method": method,
+            "path": path,
+            "body_hash": body_hash(body),
+            "query_hash": body_hash(query),
+            "before_hash": before_hash_value,
+            "idempotency_key": idempotency_key,
+            "idempotency_key_hash": body_hash(idempotency_key),
+            "plan_nonce": plan_nonce,
+            "request_hash": request_hash,
+        })
+        plan["confirmation_expires_at"] = datetime.fromtimestamp(
+            saved_plan["expires_at"], tz=timezone.utc
+        ).isoformat()
         return envelope(ok=True, profile=args.profile, account_id=account_id, data={"dry_run": True, "plan": plan}, warnings=warnings,
                         request={"method": method, "path": path})
-    if not args.confirm or args.confirm != token:
+    if (
+        args.confirm != token
+        or not stored_plan
+        or stored_plan.get("request_hash") != request_hash
+        or stored_plan.get("profile") != args.profile
+        or stored_plan.get("account_id") != account_id
+    ):
         raise ConflictErrorWithPlan("Confirmation hash missing or stale; rerun without --apply", plan, account_id, warnings)
     audit_preflight()
+    if not consume_confirmation_plan(token, request_hash):
+        raise ConflictErrorWithPlan("Confirmation hash expired or already consumed; rerun without --apply", plan, account_id, warnings)
     if upload_path:
         try:
-            response = client.upload_file(path, upload_path, purpose=args.purpose, idempotency_key=args.idempotency_key)
+            response = client.upload_file(path, upload_path, purpose=args.purpose, idempotency_key=idempotency_key)
         except AdsManagerError as exc:
             raise _with_context(exc, account_id, warnings)
     else:
         try:
-            response = client.request(method, path, query=query, body=body, idempotency_key=args.idempotency_key)
+            response = client.request(method, path, query=query, body=body, idempotency_key=idempotency_key)
         except AdsManagerError as exc:
             raise _with_context(exc, account_id, warnings)
     readback: Any = None
+    verified: bool | None = None
+    verification_error: str | None = None
     readback_path = _readback_path(method, path, response.data)
     if readback_path:
         try:
             readback_response = client.request("GET", readback_path)
             readback = readback_response.data
+            verified = True
         except AdsManagerError as exc:
+            verified = False
+            verification_error = f"Post-write readback failed: {exc.category}"
             warnings.append(f"Post-write readback failed safely: {exc.category}")
+    else:
+        verification_error = "Post-write verification is not supported for this operation"
     audit_event({
         "operation": "api_mutation", "method": method, "path": path, "resource_ids": [_account_data(response.data).get("id")],
         "body_hash": body_hash(body), "diff": diff, "request_id": response.request_id,
-        "idempotency_key": args.idempotency_key,
+        "idempotency_key": idempotency_key,
     })
     return envelope(ok=True, profile=args.profile, account_id=account_id,
-                    data={"applied": True, "result": response.data, "readback": readback}, warnings=warnings,
+                    data={
+                        "applied": True,
+                        "verified": verified,
+                        "verification_error": verification_error,
+                        "result": response.data,
+                        "readback": readback,
+                    }, warnings=warnings,
                     request={"method": method, "path": path, "status": response.status, "request_id": response.request_id})
 
 
@@ -751,20 +878,90 @@ def command_capi(args: argparse.Namespace) -> dict[str, Any]:
             if not 3 <= len(args.name) <= 1000:
                 raise ValidationError("CAPI key name must be 3–1000 characters")
             create_body = {"name": args.name}
-            token = confirmation_hash("POST", "/conversions/api_keys", create_body, account_id)
+            stored_plan: dict[str, Any] | None = None
+            if args.apply:
+                if not args.confirm:
+                    raise ConflictErrorWithPlan(
+                        "Apply requires a confirmation hash from a fresh dry run",
+                        {"operation": "POST /conversions/api_keys", "rerun_required": True},
+                        account_id,
+                    )
+                stored_plan = get_confirmation_plan(args.confirm)
+                if stored_plan is None:
+                    raise ConflictErrorWithPlan(
+                        "Confirmation hash is missing, expired, or already consumed; rerun without --apply",
+                        {"operation": "POST /conversions/api_keys", "rerun_required": True},
+                        account_id,
+                    )
+            idempotency_key = (
+                args.idempotency_key
+                or (str(stored_plan.get("idempotency_key")) if stored_plan and stored_plan.get("idempotency_key") else None)
+                or str(uuid.uuid4())
+            )
+            plan_nonce = (
+                str(stored_plan.get("plan_nonce")) if stored_plan and stored_plan.get("plan_nonce") else str(uuid.uuid4())
+            )
+            before_hash_value = body_hash(None)
+            token = confirmation_hash(
+                "POST",
+                "/conversions/api_keys",
+                create_body,
+                account_id,
+                query={},
+                idempotency_key=idempotency_key,
+                before_hash=before_hash_value,
+                plan_nonce=plan_nonce,
+            )
+            request_hash = _confirmation_request_hash(
+                profile=args.profile,
+                account_id=account_id,
+                method="POST",
+                path="/conversions/api_keys",
+                body=create_body,
+                query={},
+                before_hash_value=before_hash_value,
+                idempotency_key=idempotency_key,
+                plan_nonce=plan_nonce,
+            )
             plan = {
                 "operation": "POST /conversions/api_keys",
                 "diff": {"before": None, "after": create_body, "reversible": "Revoke in Ads Manager"},
                 "confirmation_hash": token,
+                "idempotency_key_hash": body_hash(idempotency_key)[:12],
+                "single_use": True,
                 "secret_handling": "The returned key will be intercepted and stored locally without printing it",
             }
             if not args.apply:
+                saved_plan = save_confirmation_plan(token, {
+                    "profile": args.profile,
+                    "account_id": account_id,
+                    "method": "POST",
+                    "path": "/conversions/api_keys",
+                    "body_hash": body_hash(create_body),
+                    "query_hash": body_hash({}),
+                    "before_hash": before_hash_value,
+                    "idempotency_key": idempotency_key,
+                    "idempotency_key_hash": body_hash(idempotency_key),
+                    "plan_nonce": plan_nonce,
+                    "request_hash": request_hash,
+                })
+                plan["confirmation_expires_at"] = datetime.fromtimestamp(
+                    saved_plan["expires_at"], tz=timezone.utc
+                ).isoformat()
                 return envelope(ok=True, profile=args.profile, account_id=account_id, data={"dry_run": True, "plan": plan})
-            if args.confirm != token:
+            if (
+                args.confirm != token
+                or not stored_plan
+                or stored_plan.get("request_hash") != request_hash
+                or stored_plan.get("profile") != args.profile
+                or stored_plan.get("account_id") != account_id
+            ):
                 raise ConflictErrorWithPlan("Confirmation hash missing or stale; rerun without --apply", plan, account_id)
             audit_preflight()
+            if not consume_confirmation_plan(token, request_hash):
+                raise ConflictErrorWithPlan("Confirmation hash expired or already consumed; rerun without --apply", plan, account_id)
             response = ads_client.request("POST", "/conversions/api_keys", body={"name": args.name},
-                                          idempotency_key=args.idempotency_key or str(uuid.uuid4()), sensitive_response=True)
+                                          idempotency_key=idempotency_key, sensitive_response=True)
             raw = response.data if isinstance(response.data, dict) else {}
             secret = raw.get("api_key")
             if not isinstance(secret, str) or not secret:
@@ -778,6 +975,8 @@ def command_capi(args: argparse.Namespace) -> dict[str, Any]:
             audit_event({"operation": "capi_key_create", "method": "POST", "path": "/conversions/api_keys",
                          "body_hash": body_hash({"name": args.name}), "request_id": response.request_id})
             return envelope(ok=True, profile=args.profile, account_id=account_id, data={
+                "applied": True, "verified": None,
+                "verification_error": "Server key readback is not supported; the returned secret was stored locally",
                 "name": args.name, "key_fingerprint": fingerprint(secret), "stored_at": str(path),
                 "production_secret_transfer_required": True,
             })

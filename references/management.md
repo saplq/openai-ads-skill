@@ -24,8 +24,8 @@ Do not invent age, gender, interests, dayparting, or lookalike controls.
 3. Draft creative within current API limits and run the policy/privacy review.
 4. Upload only a user-provided asset unless the user explicitly requests image generation and that tool is available.
 5. Create the ad with `status: paused`.
-6. Review the CLI plan and confirmation hash with the user.
-7. Apply, inspect post-write readback, then separately confirm activation.
+6. Review the CLI's single-use plan and 15-minute confirmation hash with the user.
+7. Apply once, inspect the explicit `verified` result, then separately confirm activation.
 
 Example dry run:
 
@@ -41,12 +41,12 @@ Repeat with `--apply --confirm HASH` only after approval. Budget, bid, targeting
 - Documented: account, campaigns, ad groups, ads, files, geo, insights, conversions, custom audiences, product feeds/delta.
 - Bulk: use `--surface bulk_preview`; limited preview, account capability must be explicit.
 - Spec-only: use `--surface spec_preview`; disabled unless the live account advertises it.
-- OAuth-only: unsupported in `0.4.0`.
+- OAuth-only: unsupported in `0.4.1`.
 - Secret-generating API and SFTP credential endpoints: never use generic `api request`.
 
 Product feed initial setup and SFTP credentials stay in Ads Manager unless current human docs explicitly document the requested API operation. Delta is for updates to existing feed variants; verify current feed docs before applying.
 
-Custom-audience inputs come only from stdin/file. Confirm first-party rights and consent and block EEA/Switzerland use. Persist one `Idempotency-Key` with the exact body for every membership operation; reuse it only to recover/retry that same operation. Read `membership_revision` before changes, bind Add/Remove when available, and require `expected_revision` for Replace. Poll the returned operation ID. On recovery-required or a lost response, resend the identical body/key; on mutation or revision conflict, re-read state and reconsider rather than blindly retrying. Never log identifiers.
+Custom-audience inputs come only from stdin/file. Confirm first-party rights and consent and block EEA/Switzerland use. The CLI generates and persists one `Idempotency-Key` with the exact body for every membership operation; reuse it only inside that request's bounded retry flow. Read `membership_revision` before changes, bind Add/Remove when available, and require `expected_revision` for Replace. Poll the returned operation ID. On recovery-required or a lost response, re-read state and create a fresh plan rather than blindly retrying. Never log identifiers.
 
 ## SemVer
 

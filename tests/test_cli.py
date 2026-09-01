@@ -28,7 +28,7 @@ def api_args(body_file, **changes):
     values = {
         "profile": "main", "method": "POST", "path": "/campaigns", "surface": "documented",
         "query_file": None, "body_file": body_file, "upload_file": None, "purpose": None,
-        "all_pages": False, "idempotency_key": "idem_1", "apply": False, "confirm": None,
+        "all_pages": False, "idempotency_key": None, "apply": False, "confirm": None,
         "policy_reviewed": False, "first_party_confirmed": False, "non_eea_confirmed": False,
     }
     values.update(changes)
@@ -160,16 +160,21 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             body = Path(temp) / "body.json"
             body.write_text('{"name":"Campaign"}', encoding="utf-8")
-            with mock.patch("scripts.openai_ads_lib.cli._profile_client", return_value=({"account_id": "acct_1"}, fake)):
+            with mock.patch.dict(os.environ, {CONFIG_ENV: str(Path(temp) / "config")}), \
+                 mock.patch("scripts.openai_ads_lib.cli._profile_client", return_value=({"account_id": "acct_1"}, fake)):
                 dry = command_api(api_args(str(body)))
                 token = dry["data"]["plan"]["confirmation_hash"]
                 with self.assertRaises(AdsManagerError):
                     command_api(api_args(str(body), apply=True, confirm="stale"))
                 with mock.patch("scripts.openai_ads_lib.cli.audit_preflight"), mock.patch("scripts.openai_ads_lib.cli.audit_event"):
                     applied = command_api(api_args(str(body), apply=True, confirm=token))
+                with self.assertRaises(AdsManagerError):
+                    command_api(api_args(str(body), apply=True, confirm=token))
         self.assertTrue(applied["data"]["applied"])
+        self.assertTrue(applied["data"]["verified"])
         self.assertEqual(applied["data"]["readback"]["status"], "paused")
         self.assertEqual([call[0] for call in fake.calls], ["POST", "GET"])
+        self.assertTrue(fake.calls[0][2]["idempotency_key"])
 
     def test_update_confirmation_binds_before_read(self):
         class StatefulClient:
@@ -187,8 +192,9 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             body = Path(temp) / "body.json"
             body.write_text('{"daily_budget":20}', encoding="utf-8")
-            args = api_args(str(body), method="PATCH", path="/campaigns/cmpn_1")
-            with mock.patch("scripts.openai_ads_lib.cli._profile_client", return_value=({"account_id": "acct_1"}, client)):
+            args = api_args(str(body), method="POST", path="/campaigns/cmpn_1")
+            with mock.patch.dict(os.environ, {CONFIG_ENV: str(Path(temp) / "config")}), \
+                 mock.patch("scripts.openai_ads_lib.cli._profile_client", return_value=({"account_id": "acct_1"}, client)):
                 dry = command_api(args)
                 self.assertEqual(dry["data"]["plan"]["diff"]["before"]["daily_budget"], 10)
                 client.budget = 11
@@ -206,8 +212,9 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             body = Path(temp) / "body.json"
             body.write_text('{"daily_budget":20}', encoding="utf-8")
-            args = api_args(str(body), method="PATCH", path="/campaigns/cmpn_1")
-            with mock.patch("scripts.openai_ads_lib.cli._profile_client", return_value=({"account_id": "acct_1"}, BrokenReadClient())):
+            args = api_args(str(body), method="POST", path="/campaigns/cmpn_1")
+            with mock.patch.dict(os.environ, {CONFIG_ENV: str(Path(temp) / "config")}), \
+                 mock.patch("scripts.openai_ads_lib.cli._profile_client", return_value=({"account_id": "acct_1"}, BrokenReadClient())):
                 with self.assertRaises(AdsManagerError) as caught:
                     command_api(args)
         self.assertIn("no confirmation hash", caught.exception.message)
@@ -221,7 +228,8 @@ class CliTests(unittest.TestCase):
                 str(body), path="/custom_audiences/aud_1/add",
                 first_party_confirmed=True, non_eea_confirmed=True,
             )
-            with mock.patch("scripts.openai_ads_lib.cli._profile_client", return_value=({"account_id": "acct_1"}, fake)):
+            with mock.patch.dict(os.environ, {CONFIG_ENV: str(Path(temp) / "config")}), \
+                 mock.patch("scripts.openai_ads_lib.cli._profile_client", return_value=({"account_id": "acct_1"}, fake)):
                 result = command_api(args)
         rendered = json.dumps(result)
         self.assertNotIn("opaque-person-123", rendered)
@@ -233,7 +241,8 @@ class CliTests(unittest.TestCase):
             body = Path(temp) / "ad.json"
             body.write_text('{"status":"active","creative":{"title":"Valid title","body":"Valid body"}}', encoding="utf-8")
             args = api_args(str(body), path="/ads", policy_reviewed=True)
-            with mock.patch("scripts.openai_ads_lib.cli._profile_client", return_value=({"account_id": "acct_1"}, fake)):
+            with mock.patch.dict(os.environ, {CONFIG_ENV: str(Path(temp) / "config")}), \
+                 mock.patch("scripts.openai_ads_lib.cli._profile_client", return_value=({"account_id": "acct_1"}, fake)):
                 with self.assertRaises(AdsManagerError) as caught:
                     command_api(args)
         self.assertEqual(caught.exception.account_id, "acct_1")
@@ -246,22 +255,70 @@ class CliTests(unittest.TestCase):
 
         base = argparse.Namespace(
             profile="main", capi_command="key", key_command="create", name="production",
-            idempotency_key="idem", apply=False, confirm=None,
+            idempotency_key=None, apply=False, confirm=None,
         )
-        with mock.patch("scripts.openai_ads_lib.cli._profile_client", return_value=({"account_id": "acct_1"}, SecretClient())):
-            dry = command_capi(base)
-            base.apply = True
-            base.confirm = dry["data"]["plan"]["confirmation_hash"]
-            with mock.patch("scripts.openai_ads_lib.cli._load_capi_secrets", return_value={"version": 1, "profiles": {}}), \
-                 mock.patch("scripts.openai_ads_lib.cli.atomic_write", return_value=Path("/secure/capi-secrets.json")) as writer, \
-                 mock.patch("scripts.openai_ads_lib.cli.audit_preflight"), \
-                 mock.patch("scripts.openai_ads_lib.cli.audit_event"):
-                result = command_capi(base)
+        with tempfile.TemporaryDirectory() as temp, \
+             mock.patch.dict(os.environ, {CONFIG_ENV: str(Path(temp) / "config")}), \
+             mock.patch("scripts.openai_ads_lib.cli._profile_client", return_value=({"account_id": "acct_1"}, SecretClient())):
+                dry = command_capi(base)
+                base.apply = True
+                base.confirm = dry["data"]["plan"]["confirmation_hash"]
+                with mock.patch("scripts.openai_ads_lib.cli._load_capi_secrets", return_value={"version": 1, "profiles": {}}), \
+                     mock.patch("scripts.openai_ads_lib.cli.atomic_write", return_value=Path("/secure/capi-secrets.json")) as writer, \
+                     mock.patch("scripts.openai_ads_lib.cli.audit_preflight"), \
+                     mock.patch("scripts.openai_ads_lib.cli.audit_event"):
+                    result = command_capi(base)
         rendered = json.dumps(result)
         self.assertNotIn("capi-super-private", rendered)
         self.assertIn("key_fingerprint", rendered)
         saved = writer.call_args.args[1]
         self.assertEqual(saved["profiles"]["main"]["production"]["api_key"], "capi-super-private")
+
+    def test_confirmation_binds_query_and_idempotency_key(self):
+        fake = FakeClient()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            body = root / "body.json"
+            first_query = root / "query-1.json"
+            second_query = root / "query-2.json"
+            body.write_text('{"name":"Campaign"}', encoding="utf-8")
+            first_query.write_text('{"mode":"one"}', encoding="utf-8")
+            second_query.write_text('{"mode":"two"}', encoding="utf-8")
+            with mock.patch.dict(os.environ, {CONFIG_ENV: str(root / "config")}), \
+                 mock.patch("scripts.openai_ads_lib.cli._profile_client", return_value=({"account_id": "acct_1"}, fake)):
+                dry = command_api(api_args(str(body), query_file=str(first_query)))
+                token = dry["data"]["plan"]["confirmation_hash"]
+                with self.assertRaises(AdsManagerError):
+                    command_api(api_args(str(body), query_file=str(second_query), apply=True, confirm=token))
+                with self.assertRaises(AdsManagerError):
+                    command_api(api_args(
+                        str(body), query_file=str(first_query), idempotency_key="different", apply=True, confirm=token
+                    ))
+        self.assertEqual(fake.calls, [])
+
+    def test_failed_readback_reports_unverified_applied_write(self):
+        class ReadbackFailureClient(FakeClient):
+            def request(self, method, path, **kwargs):
+                if method == "GET":
+                    raise AdsManagerError("readback unavailable")
+                return super().request(method, path, **kwargs)
+
+        fake = ReadbackFailureClient()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            body = root / "body.json"
+            body.write_text('{"name":"Campaign"}', encoding="utf-8")
+            with mock.patch.dict(os.environ, {CONFIG_ENV: str(root / "config")}), \
+                 mock.patch("scripts.openai_ads_lib.cli._profile_client", return_value=({"account_id": "acct_1"}, fake)), \
+                 mock.patch("scripts.openai_ads_lib.cli.audit_preflight"), \
+                 mock.patch("scripts.openai_ads_lib.cli.audit_event"):
+                dry = command_api(api_args(str(body)))
+                result = command_api(api_args(
+                    str(body), apply=True, confirm=dry["data"]["plan"]["confirmation_hash"]
+                ))
+        self.assertTrue(result["data"]["applied"])
+        self.assertFalse(result["data"]["verified"])
+        self.assertIn("readback failed", result["data"]["verification_error"].lower())
 
     def test_doctor_detects_openapi_docs_and_policy_drift(self):
         args = argparse.Namespace(offline=False, check_updates=True)

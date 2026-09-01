@@ -2,7 +2,7 @@
 name: openai-ads-manager
 description: Safely inspect, report on, create, and manage OpenAI Ads campaigns; configure Pixel and Conversions API; work with audiences, product feeds, and gated preview APIs. Use when a user asks about an OpenAI Ads account, performance, campaign operations, conversion tracking, or Ads API access.
 metadata:
-  version: "0.4.0"
+  version: "0.4.1"
 ---
 
 # OpenAI Ads Manager
@@ -14,7 +14,7 @@ Use the local CLI for deterministic API, credential, reporting, and conversion w
 1. **Authenticate** — first look for `ads-manager-api-key.txt` beside `SKILL.md`, at the plugin root, or in `~/Downloads`. If no profile exists, any authenticated command automatically validates it with `GET /ad_account`, stores it securely, and removes the downloaded file. Fall back to hidden `auth login` or `auth import-file --file PATH`; never ask for a key in chat or argv.
 2. **Inspect/report** — read first. Run `doctor`, `report account`, or a read-only `api request`. Exhaust pagination and exclude the incomplete account-local day.
 3. **Propose** — show evidence, confidence, risk, reversibility, and a measurement window. Ask for the business goal or target KPI before recommending spend changes.
-4. **Apply only after confirmation** — mutations first return a redacted plan and confirmation hash. Apply with `--apply --confirm HASH`, then verify the readback.
+4. **Apply only after confirmation** — mutations first return a redacted, single-use plan with a 15-minute confirmation hash and persisted idempotency key. Apply with `--apply --confirm HASH`; treat post-write readback as best-effort verification.
 
 Use [management.md](references/management.md) for campaign operations and API routing; [performance.md](references/performance.md) for analysis; [conversions.md](references/conversions.md) for Pixel+CAPI and target-repository work; and [policy-privacy.md](references/policy-privacy.md) before creatives, audiences, or restricted categories.
 

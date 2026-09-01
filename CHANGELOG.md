@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1 — 2026-09-01
+
+- Makes mutation confirmations single-use and time-limited, binding body, query, live before-state, and a persisted idempotency key.
+- Replaces prefix routing with an exact OpenAPI `method + path` allowlist and fixes update-ad title validation.
+- Reports post-write verification explicitly, clarifies plaintext credential storage and platform support, and removes UI screenshots from the manifest.
+- Adds CI and a private vulnerability-reporting policy.
+
 ## 0.4.0 — 2026-09-01
 
 - Packages the standalone skill as an installable Codex/ChatGPT plugin with a public repo marketplace manifest.

@@ -14,9 +14,12 @@ from scripts.openai_ads_lib.security import (
     atomic_write,
     audit_event,
     confirmation_hash,
+    consume_confirmation_plan,
     ensure_secure_dir,
+    get_confirmation_plan,
     load_credentials,
     redact,
+    save_confirmation_plan,
     save_credentials,
 )
 
@@ -77,6 +80,36 @@ class SecurityTests(unittest.TestCase):
     def test_archive_confirmation_binds_resource(self):
         token = confirmation_hash("POST", "/campaigns/cmpn_123/archive", {}, "acct_1")
         self.assertTrue(token.endswith(":cmpn_123"))
+
+    def test_confirmation_binds_query_idempotency_and_nonce(self):
+        common = {
+            "method": "POST",
+            "path": "/campaigns",
+            "body": {"name": "Campaign"},
+            "account_id": "acct_1",
+            "before_hash": "before",
+            "plan_nonce": "nonce-1",
+        }
+        first = confirmation_hash(query={"mode": "one"}, idempotency_key="idem-1", **common)
+        changed_query = confirmation_hash(query={"mode": "two"}, idempotency_key="idem-1", **common)
+        changed_key = confirmation_hash(query={"mode": "one"}, idempotency_key="idem-2", **common)
+        changed_nonce = confirmation_hash(
+            query={"mode": "one"}, idempotency_key="idem-1", **{**common, "plan_nonce": "nonce-2"}
+        )
+        self.assertEqual(len({first, changed_query, changed_key, changed_nonce}), 4)
+
+    def test_confirmation_plan_is_permission_restricted_and_single_use(self):
+        record = save_confirmation_plan("token", {
+            "request_hash": "request-hash",
+            "idempotency_key": "local-idempotency-key",
+            "plan_nonce": "nonce",
+        })
+        self.assertGreater(record["expires_at"], record["created_at"])
+        self.assertEqual(stat.S_IMODE((self.config / "pending-plans.json").stat().st_mode), 0o600)
+        self.assertIsNotNone(get_confirmation_plan("token"))
+        self.assertTrue(consume_confirmation_plan("token", "request-hash"))
+        self.assertIsNone(get_confirmation_plan("token"))
+        self.assertFalse(consume_confirmation_plan("token", "request-hash"))
 
 
 if __name__ == "__main__":

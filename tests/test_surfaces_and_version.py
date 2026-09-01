@@ -1,3 +1,4 @@
+import hashlib
 import json
 import unittest
 from pathlib import Path
@@ -18,11 +19,11 @@ class SurfaceAndVersionTests(unittest.TestCase):
         marketplace = json.loads((ROOT / ".agents" / "plugins" / "marketplace.json").read_text())
         skill = (ROOT / "SKILL.md").read_text()
         packaged_skill = (ROOT / "skills" / "openai-ads-manager" / "SKILL.md").read_text()
-        self.assertEqual(VERSION, "0.4.0")
+        self.assertEqual(VERSION, "0.4.1")
         self.assertEqual(manifest["skill_version"], VERSION)
         self.assertEqual(plugin["version"], VERSION)
-        self.assertIn('version: "0.4.0"', skill)
-        self.assertIn('version: "0.4.0"', packaged_skill)
+        self.assertIn('version: "0.4.1"', skill)
+        self.assertIn('version: "0.4.1"', packaged_skill)
         self.assertEqual(marketplace["plugins"][0]["name"], plugin["name"])
         self.assertEqual(marketplace["plugins"][0]["source"]["url"], "https://github.com/saplq/openai-ads-skill.git")
         self.assertTrue((ROOT / "assets" / "openai-ads-manager-social-preview.png").is_file())
@@ -33,8 +34,8 @@ class SurfaceAndVersionTests(unittest.TestCase):
 
     def test_preview_and_oauth_routing(self):
         with self.assertRaises(ValidationError):
-            authorize_surface("/bulk/jobs", "documented")
-        self.assertEqual(authorize_surface("/bulk/jobs", "bulk_preview"), "bulk_preview")
+            authorize_surface("/bulk_mutation_jobs", "documented", "POST")
+        self.assertEqual(authorize_surface("/bulk_mutation_jobs", "bulk_preview", "POST"), "bulk_preview")
         with self.assertRaises(ValidationError):
             authorize_surface("/oauth/token", "spec_preview")
         with self.assertRaises(PolicyError):
@@ -58,6 +59,29 @@ class SurfaceAndVersionTests(unittest.TestCase):
             authorize_surface("/feeds", "documented", "GET")
         with self.assertRaises(PolicyError):
             authorize_surface("/feeds/feed_1/sftp_access", "spec_preview", "POST")
+
+    def test_allowlist_requires_exact_method_and_path_template(self):
+        self.assertEqual(authorize_surface("/campaigns/cmpn_1", "documented", "POST"), "documented")
+        with self.assertRaises(ValidationError):
+            authorize_surface("/campaigns/cmpn_1", "documented", "DELETE")
+        with self.assertRaises(ValidationError):
+            authorize_surface("/campaigns/cmpn_1/future-dangerous-action", "documented", "POST")
+
+    def test_pinned_operation_surface_is_complete_and_stable(self):
+        surface = json.loads((ROOT / "references" / "api-surface.json").read_text())
+        openapi_operations = (
+            surface["documented"] + surface["spec_preview"] + surface["oauth_only"] + surface["secret"]
+        )
+        self.assertEqual(len(openapi_operations), 88)
+        self.assertEqual(len(openapi_operations), len(set(openapi_operations)))
+        digest = hashlib.sha256(("\n".join(sorted(openapi_operations)) + "\n").encode()).hexdigest()
+        self.assertEqual(digest, surface["operation_surface_sha256"])
+        self.assertEqual(digest, json.loads((ROOT / "references" / "compatibility.json").read_text())["openapi"]["operation_surface_sha256"])
+
+    def test_update_ad_title_allows_one_character_but_create_requires_three(self):
+        validate_mutation("POST", "/ads/ad_1", {"creative": {"title": "A", "body": "Body"}})
+        with self.assertRaises(ValidationError):
+            validate_mutation("POST", "/ads", {"creative": {"title": "A", "body": "Body"}})
 
     def test_budget_and_targeting_changes_are_high_risk(self):
         warnings = validate_mutation("PATCH", "/campaigns/cmpn_1", {"daily_budget": 100, "targeting": {"locations": []}})

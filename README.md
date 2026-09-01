@@ -1,8 +1,10 @@
-# OpenAI Ads Manager
+# Ads Manager for OpenAI — Community
+
+Community-built and not affiliated with or endorsed by OpenAI.
 
 Manage OpenAI Ads with Codex: understand performance, prepare campaigns, and connect Pixel+CAPI without exposing your API key.
 
-[![Skill version](https://img.shields.io/badge/skill-v0.4.0-111827)](CHANGELOG.md)
+[![Skill version](https://img.shields.io/badge/skill-v0.4.1-111827)](CHANGELOG.md)
 [![Ads API](https://img.shields.io/badge/Ads_API-v1-10A37F)](https://developers.openai.com/ads)
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -23,7 +25,7 @@ Manage OpenAI Ads with Codex: understand performance, prepare campaigns, and con
 1. Add the marketplace:
 
    ```bash
-   codex plugin marketplace add saplq/openai-ads-skill --ref main
+   codex plugin marketplace add saplq/openai-ads-skill --ref v0.4.1
    ```
 
 2. Install the plugin:
@@ -36,7 +38,7 @@ Manage OpenAI Ads with Codex: understand performance, prepare campaigns, and con
 4. Download `ads-manager-api-key.txt` from OpenAI Ads Manager and leave it in Downloads.
 5. Ask Codex to use `$openai-ads-manager`.
 
-No terminal auth is needed. On first use, the skill validates `GET /ad_account`, stores the key in protected local storage, and removes the downloaded copy.
+No terminal auth is needed. On first use, the skill validates `GET /ad_account`, stores the key unencrypted in a permission-restricted local file (`0600`), and removes the downloaded copy. The key is never printed, passed through argv, or written to audit logs.
 
 ## Try it
 
@@ -50,15 +52,16 @@ Use $openai-ads-manager to add Pixel+CAPI to this repository with consent and de
 
 - The downloaded key filename is gitignored; never commit, share, or archive it.
 - Credentials use local `0700`/`0600` storage. Secrets and audience identifiers stay out of output and audit logs.
-- Writes require confirmation and readback. Preview APIs require an explicit feature gate and live capability check.
+- Writes require a single-use, 15-minute confirmation and attempt post-write verification when supported. Preview APIs require an explicit feature gate and live capability check.
+- Supported: macOS, Linux, and WSL. Native Windows is not currently tested.
 
-Skill `0.4.0` · Ads API `/v1` · OpenAPI `2.3.0` · Ads Policy `v1.5` · oCPC open beta · Bulk limited preview
+Skill `0.4.1` · Ads API `/v1` · OpenAPI `2.3.0` · Ads Policy `v1.5` · oCPC open beta · Bulk limited preview
 
 <details>
 <summary>CLI and development</summary>
 
 ```bash
-codex plugin marketplace add saplq/openai-ads-skill
+codex plugin marketplace add saplq/openai-ads-skill --ref v0.4.1
 python3 scripts/openai_ads.py report account --profile main
 python3 scripts/openai_ads.py api request GET /campaigns --profile main --all-pages
 python3 -m unittest discover -s tests
@@ -68,4 +71,4 @@ The standalone skill still works: download the repository and place the key besi
 
 </details>
 
-Community-built and not affiliated with OpenAI. MIT licensed. If this helps, a star helps others find it.
+MIT licensed. If this helps, a star helps others find it.

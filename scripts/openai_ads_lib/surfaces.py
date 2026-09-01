@@ -2,26 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import re
 import urllib.parse
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from .errors import PolicyError, ValidationError
 from . import VERSION
 
-DOCUMENTED = (
-    "/campaigns",
-    "/ad_groups",
-    "/ads",
-    "/upload",
-    "/uploads",
-    "/geo_lookup",
-    "/conversions",
-    "/custom_audiences",
-)
-BULK = ("/bulk",)
-SPEC_PREVIEW = ("/business_agent_tools", "/business_agents", "/lead_forms", "/lead_sync_subscriptions", "/partner_data")
-OAUTH_ONLY = ("/oauth", "/me", "/ad_accounts", "/ad_account_creation_sessions", "/organizations", "/organization_users")
+ROOT = Path(__file__).resolve().parents[2]
+SURFACE_PATH = ROOT / "references" / "api-surface.json"
+SURFACE_NAMES = ("documented", "bulk_preview", "spec_preview", "oauth_only", "secret")
+OAUTH_ONLY_PREFIXES = ("/oauth", "/ad_accounts", "/ad_account_creation_sessions", "/organizations", "/organization_users")
 SECRET_PATHS = (
     re.compile(r"^/api_keys(?:/|$)"),
     re.compile(r"^/conversions/api_keys(?:/|$)"),
@@ -44,27 +38,50 @@ def _prefix(path: str, prefixes: tuple[str, ...]) -> bool:
     return any(path == value or path.startswith(value + "/") for value in prefixes)
 
 
+@lru_cache(maxsize=1)
+def operation_rules() -> dict[str, tuple[tuple[str, str], ...]]:
+    try:
+        payload = json.loads(SURFACE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValidationError("Pinned API surface is missing or invalid; failing closed") from exc
+    rules: dict[str, tuple[tuple[str, str], ...]] = {}
+    for surface in SURFACE_NAMES:
+        entries = payload.get(surface)
+        if not isinstance(entries, list):
+            raise ValidationError(f"Pinned API surface is missing '{surface}' rules; failing closed")
+        parsed: list[tuple[str, str]] = []
+        for entry in entries:
+            if not isinstance(entry, str) or " " not in entry:
+                raise ValidationError("Pinned API surface contains an invalid operation; failing closed")
+            operation_method, template = entry.split(" ", 1)
+            parsed.append((operation_method.upper(), template))
+        rules[surface] = tuple(parsed)
+    return rules
+
+
+def _matches_template(path: str, template: str) -> bool:
+    actual_parts = path.strip("/").split("/") if path != "/" else []
+    template_parts = template.strip("/").split("/") if template != "/" else []
+    if len(actual_parts) != len(template_parts):
+        return False
+    return all(
+        bool(actual) if expected.startswith("{") and expected.endswith("}") else actual == expected
+        for actual, expected in zip(actual_parts, template_parts)
+    )
+
+
 def classify_path(path: str, method: str | None = None) -> str:
     path = normalize_path(path)
+    requested_method = method.upper() if method else None
+    for surface, rules in operation_rules().items():
+        if any((requested_method is None or requested_method == rule_method) and _matches_template(path, template)
+               for rule_method, template in rules):
+            return surface
     for pattern in SECRET_PATHS:
         if pattern.search(path):
             return "secret"
-    if _prefix(path, OAUTH_ONLY):
+    if _prefix(path, OAUTH_ONLY_PREFIXES):
         return "oauth_only"
-    if _prefix(path, BULK):
-        return "bulk_preview"
-    if _prefix(path, SPEC_PREVIEW):
-        return "spec_preview"
-    if path.startswith("/feeds/") and path.endswith("/products"):
-        return "documented" if not method or method.upper() == "PATCH" else "spec_preview"
-    if _prefix(path, ("/feeds",)):
-        return "spec_preview"
-    if _prefix(path, ("/ad_account/activate", "/ad_account/pause", "/ad_account/negative_keywords", "/ad_account/spend_limit_windows")):
-        return "spec_preview"
-    if path in {"/ad_account", "/ad_account/brand", "/ad_account/insights"}:
-        return "documented"
-    if _prefix(path, DOCUMENTED):
-        return "documented"
     return "unknown"
 
 
@@ -106,8 +123,9 @@ def validate_mutation(method: str, path: str, body: Any) -> list[str]:
         creative = body.get("creative") if isinstance(body.get("creative"), dict) else body
         title = creative.get("title")
         copy = creative.get("body") if creative.get("body") is not None else creative.get("copy")
-        if title is not None and not 3 <= len(str(title)) <= 50:
-            raise ValidationError("Ad creative title must be 3–50 characters")
+        title_minimum = 3 if method == "POST" and path.rstrip("/") == "/ads" else 1
+        if title is not None and not title_minimum <= len(str(title)) <= 50:
+            raise ValidationError(f"Ad creative title must be {title_minimum}–50 characters")
         if copy is not None and not 1 <= len(str(copy)) <= 100:
             raise ValidationError("Ad creative body must be 1–100 characters")
         target_url = creative.get("target_url") or creative.get("link")

@@ -1,5 +1,5 @@
 interface:
-  display_name: "OpenAI Ads Manager"
+  display_name: "Ads Manager for OpenAI — Community"
   short_description: "Safe OpenAI Ads operations and analytics"
   default_prompt: "Use $openai-ads-manager to audit my OpenAI Ads account and propose evidence-based next actions."
 policy:

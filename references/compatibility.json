@@ -1,5 +1,5 @@
 {
-  "skill_version": "0.4.0",
+  "skill_version": "0.4.1",
   "checked_at": "2026-09-01",
   "ads_api": {
     "major": "v1",
@@ -25,12 +25,9 @@
     "bulk": {"maturity": "limited_preview", "url": "https://developers.openai.com/ads/bulk-api"}
   },
   "surface": {
-    "documented": [
-      "/ad_account", "/ad_account/brand", "/ad_account/insights", "/campaigns", "/ad_groups", "/ads",
-      "/upload", "/uploads", "/geo_lookup/search", "/conversions", "/custom_audiences",
-      "PATCH /feeds/{feed_id}/products"
-    ],
-    "bulk_preview": ["/bulk"],
+    "exact_allowlist": "api-surface.json",
+    "documented": ["exact OpenAPI 2.3.0 method + path pairs classified in api-surface.json"],
+    "bulk_preview": ["POST /bulk_mutation_jobs", "GET /bulk_mutation_jobs/{job_id}", "GET /bulk_mutation_jobs/{job_id}/operations"],
     "spec_preview": [
       "/ad_account controls", "/business_agent_tools", "/business_agents", "/lead_forms", "/feeds admin",
       "/lead_sync_subscriptions", "/partner_data"

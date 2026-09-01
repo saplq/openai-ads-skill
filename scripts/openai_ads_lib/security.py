@@ -8,13 +8,18 @@ import os
 import re
 import stat
 import tempfile
+import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import fcntl
+
 from .errors import AuthError, ValidationError
 
 CONFIG_ENV = "OPENAI_ADS_MANAGER_CONFIG_DIR"
+PLAN_TTL_SECONDS = 15 * 60
 SECRET_KEYS = re.compile(
     r"(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|cookie|"
     r"email|phone|external[_-]?id|first[_-]?name|last[_-]?name|address|ip[_-]?address)",
@@ -146,12 +151,115 @@ def body_hash(value: Any) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
-def confirmation_hash(method: str, path: str, body: Any, account_id: str | None) -> str:
-    material = {"method": method.upper(), "path": path, "body": body, "account_id": account_id}
+def confirmation_hash(
+    method: str,
+    path: str,
+    body: Any,
+    account_id: str | None,
+    *,
+    query: Any = None,
+    idempotency_key: str | None = None,
+    before_hash: str | None = None,
+    plan_nonce: str | None = None,
+) -> str:
+    material = {
+        "method": method.upper(),
+        "path": path,
+        "body": body,
+        "query": query,
+        "idempotency_key_hash": body_hash(idempotency_key) if idempotency_key else None,
+        "before_hash": before_hash,
+        "plan_nonce": plan_nonce,
+        "account_id": account_id,
+    }
     digest = body_hash(material)[:16]
     resource_id = extract_resource_id(path)
     irreversible = method.upper() == "DELETE" or "archive" in path.lower()
     return f"{digest}:{resource_id}" if irreversible and resource_id else digest
+
+
+@contextmanager
+def _plan_lock():
+    root = ensure_secure_dir()
+    path = root / "pending-plans.lock"
+    flags = os.O_CREAT | os.O_RDWR
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except OSError as exc:
+        raise AuthError(f"Cannot lock confirmation plans safely: {exc}") from exc
+    try:
+        os.fchmod(descriptor, 0o600)
+        st = os.fstat(descriptor)
+        if not stat.S_ISREG(st.st_mode):
+            raise AuthError("Confirmation plan lock is not a regular file")
+        _ensure_owner(path, st)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(descriptor)
+
+
+def _active_plans(payload: Any, *, now: float) -> dict[str, Any]:
+    source = payload.get("plans", {}) if isinstance(payload, dict) else {}
+    return {
+        token: record
+        for token, record in source.items()
+        if isinstance(record, dict)
+        and not record.get("consumed_at")
+        and isinstance(record.get("expires_at"), (int, float))
+        and float(record["expires_at"]) > now
+    }
+
+
+def save_confirmation_plan(token: str, record: dict[str, Any], *, ttl_seconds: int = PLAN_TTL_SECONDS) -> dict[str, Any]:
+    now = time.time()
+    saved = {
+        **record,
+        "created_at": now,
+        "expires_at": now + ttl_seconds,
+        "consumed_at": None,
+    }
+    with _plan_lock():
+        plans = _active_plans(secure_read("pending-plans.json", {"version": 1, "plans": {}}), now=now)
+        plans[token] = saved
+        if len(plans) > 128:
+            ordered = sorted(plans, key=lambda item: float(plans[item].get("expires_at", 0)), reverse=True)
+            plans = {item: plans[item] for item in ordered[:128]}
+        atomic_write("pending-plans.json", {"version": 1, "plans": plans})
+    return dict(saved)
+
+
+def get_confirmation_plan(token: str) -> dict[str, Any] | None:
+    now = time.time()
+    payload = secure_read("pending-plans.json", {"version": 1, "plans": {}})
+    record = payload.get("plans", {}).get(token) if isinstance(payload, dict) else None
+    if not isinstance(record, dict) or record.get("consumed_at"):
+        return None
+    expires_at = record.get("expires_at")
+    if not isinstance(expires_at, (int, float)) or float(expires_at) <= now:
+        return None
+    return dict(record)
+
+
+def consume_confirmation_plan(token: str, request_hash: str) -> bool:
+    now = time.time()
+    with _plan_lock():
+        payload = secure_read("pending-plans.json", {"version": 1, "plans": {}})
+        plans = payload.get("plans", {}) if isinstance(payload, dict) else {}
+        record = plans.get(token) if isinstance(plans, dict) else None
+        if (
+            not isinstance(record, dict)
+            or record.get("consumed_at")
+            or record.get("request_hash") != request_hash
+            or not isinstance(record.get("expires_at"), (int, float))
+            or float(record["expires_at"]) <= now
+        ):
+            return False
+        record["consumed_at"] = now
+        atomic_write("pending-plans.json", {"version": 1, "plans": plans})
+    return True
 
 
 def extract_resource_id(path: str) -> str | None:
