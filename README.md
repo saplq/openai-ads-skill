@@ -20,9 +20,21 @@ Manage OpenAI Ads with Codex: understand performance, prepare campaigns, and con
 
 ## Install in one minute
 
-1. Ask Codex: `Add the plugin marketplace saplq/openai-ads-skill and install OpenAI Ads Manager`.
-2. Download `ads-manager-api-key.txt` from OpenAI Ads Manager and leave it in Downloads.
-3. Ask Codex to use `$openai-ads-manager`.
+1. Add the marketplace:
+
+   ```bash
+   codex plugin marketplace add saplq/openai-ads-skill --ref main
+   ```
+
+2. Install the plugin:
+
+   ```bash
+   codex plugin add openai-ads-manager@openai-ads-skill
+   ```
+
+3. Open a new Codex task so the plugin is loaded.
+4. Download `ads-manager-api-key.txt` from OpenAI Ads Manager and leave it in Downloads.
+5. Ask Codex to use `$openai-ads-manager`.
 
 No terminal auth is needed. On first use, the skill validates `GET /ad_account`, stores the key in protected local storage, and removes the downloaded copy.
 
